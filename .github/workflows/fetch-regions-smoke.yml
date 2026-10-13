@@ -1,0 +1,103 @@
+name: fetch-regions smoke
+
+on:
+  push:
+    paths:
+      - "config/regions.yaml"
+      - "config/schema/**"
+      - "scripts/parse_regions.py"
+      - ".github/actions/fetch-regions/**"
+      - ".github/workflows/fetch-regions-smoke.yml"
+  pull_request:
+    paths:
+      - "config/regions.yaml"
+      - "config/schema/**"
+      - "scripts/parse_regions.py"
+      - ".github/actions/fetch-regions/**"
+      - ".github/workflows/fetch-regions-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  parse-local:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch regions (local checkout)
+        id: regions
+        uses: ./.github/actions/fetch-regions
+        with:
+          working-directory: ${{ github.workspace }}
+
+      - name: Assert outputs
+        env:
+          REGION_COUNT: ${{ steps.regions.outputs.region-count }}
+          REGIONS_JSON: ${{ steps.regions.outputs.regions-json }}
+          REGIONS_MATRIX: ${{ steps.regions.outputs.regions-matrix }}
+        run: |
+          set -euo pipefail
+          echo "region-count=${REGION_COUNT}"
+          echo "regions-json=${REGIONS_JSON}"
+          echo "regions-matrix=${REGIONS_MATRIX}"
+          test "${REGION_COUNT}" -ge 1
+          python3 - <<'PY'
+          import json, os
+          names = json.loads(os.environ["REGIONS_JSON"])
+          matrix = json.loads(os.environ["REGIONS_MATRIX"])
+          assert isinstance(names, list) and names, names
+          assert matrix.get("region") == names, matrix
+          print("ok")
+          PY
+
+  matrix-deploy-mock:
+    needs: parse-local
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.regions.outputs.regions-matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch regions (local checkout)
+        id: regions
+        uses: ./.github/actions/fetch-regions
+        with:
+          working-directory: ${{ github.workspace }}
+
+  mock-per-region:
+    needs: matrix-deploy-mock
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-deploy-mock.outputs.matrix) }}
+    steps:
+      - name: Mock deploy
+        run: |
+          echo "Mock deploy to region=${{ matrix.region }}"
+
+  validate-region-fails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Invalid region must fail
+        id: bad
+        continue-on-error: true
+        uses: ./.github/actions/fetch-regions
+        with:
+          working-directory: ${{ github.workspace }}
+          region: not-a-real-region
+
+      - name: Assert failure
+        if: steps.bad.outcome == 'success'
+        run: |
+          echo "::error::fetch-regions should have failed for an unknown region"
+          exit 1
+
+      - name: Valid single region
+        uses: ./.github/actions/fetch-regions
+        with:
+          working-directory: ${{ github.workspace }}
+          region: us-central1

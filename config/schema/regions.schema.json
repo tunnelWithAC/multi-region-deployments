@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tunnelWithAC/multi-region-deployments/config/schema/regions.schema.json",
+  "title": "Multi-region active regions config",
+  "description": "Source of truth for regions that microservice pipelines may deploy to.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["active_regions"],
+  "properties": {
+    "active_regions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "GCP region id (e.g. us-central1). Used as the deploy matrix key.",
+            "pattern": "^[a-z][a-z0-9-]*[a-z0-9]$"
+          },
+          "tier": {
+            "type": "string",
+            "description": "Illustrative capacity/priority tier. Not used by v1 pipelines.",
+            "enum": ["primary", "secondary", "dr"]
+          },
+          "endpoint_suffix": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Illustrative DNS/endpoint suffix. Not used by v1 pipelines."
+          }
+        }
+      }
+    }
+  }
+}

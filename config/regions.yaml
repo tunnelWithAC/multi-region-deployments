@@ -1,0 +1,17 @@
+# Canonical list of active deployment regions.
+# Schema: config/schema/regions.schema.json
+#
+# Pipelines treat `name` as the region id for matrix keys and validation.
+# `tier` and `endpoint_suffix` are reserved for future routing/DNS behavior
+# and are not consumed by v1 automation.
+
+active_regions:
+  - name: "us-central1"
+    tier: "primary"
+    endpoint_suffix: "us"
+  - name: "europe-west1"
+    tier: "primary"
+    endpoint_suffix: "eu"
+  - name: "asia-east1"
+    tier: "secondary"
+    endpoint_suffix: "ap"

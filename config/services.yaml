@@ -1,0 +1,14 @@
+# Registry of microservice repositories that receive region fan-out deploys.
+# Schema: config/schema/services.schema.json
+#
+# Fields:
+#   name      - Logical service name (documentation / logs)
+#   repo      - GitHub "owner/repo" for workflow_dispatch
+#   workflow  - Workflow file name under .github/workflows/
+#   ref       - Git ref to run the workflow on (default: main)
+
+services:
+  - name: multi-region-microservice-example
+    repo: tunnelWithAC/multi-region-microservice-example
+    workflow: deploy.yml
+    ref: main

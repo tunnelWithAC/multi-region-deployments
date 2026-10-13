@@ -1,0 +1,163 @@
+name: Fetch Regions
+description: >
+  Fetch public regions.yaml from the central multi-region config repo, parse
+  active regions, optionally validate a single region, and emit JSON suitable
+  for GitHub Actions strategy.matrix.
+
+inputs:
+  config-repo:
+    description: GitHub repository (owner/name) that owns regions.yaml
+    required: false
+    default: tunnelWithAC/multi-region-deployments
+  config-path:
+    description: Path to regions.yaml inside the config repository
+    required: false
+    default: config/regions.yaml
+  ref:
+    description: Git ref (branch, tag, or commit SHA) to read
+    required: false
+    default: main
+  token:
+    description: >
+      Optional token for private config repos. Leave empty for public raw.githubusercontent.com fetch.
+    required: false
+    default: ""
+  region:
+    description: >
+      Optional single region to select. When set, the action fails if that region
+      is not listed under active_regions.
+    required: false
+    default: ""
+  working-directory:
+    description: >
+      Checkout root of multi-region-deployments when this action is used from the
+      same repository (skips network fetch and uses local config-path).
+    required: false
+    default: ""
+
+outputs:
+  regions-json:
+    description: JSON array of region name strings (e.g. ["us-central1","europe-west1"])
+    value: ${{ steps.parse.outputs.regions-json }}
+  regions-matrix:
+    description: JSON object for strategy.matrix (e.g. {"region":["us-central1",...]})
+    value: ${{ steps.parse.outputs.regions-matrix }}
+  regions-full-json:
+    description: JSON array of full region objects from regions.yaml
+    value: ${{ steps.parse.outputs.regions-full-json }}
+  region-count:
+    description: Number of regions in the selected set
+    value: ${{ steps.parse.outputs.region-count }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve regions.yaml
+      id: fetch
+      shell: bash
+      env:
+        CONFIG_REPO: ${{ inputs.config-repo }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        CONFIG_REF: ${{ inputs.ref }}
+        CONFIG_TOKEN: ${{ inputs.token }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        dest="${RUNNER_TEMP}/multi-region-regions.yaml"
+        mkdir -p "${RUNNER_TEMP}"
+
+        if [[ -n "${WORKING_DIRECTORY}" ]]; then
+          local_file="${WORKING_DIRECTORY%/}/${CONFIG_PATH}"
+          if [[ ! -f "${local_file}" ]]; then
+            echo "::error::Local regions file not found: ${local_file}"
+            exit 1
+          fi
+          cp "${local_file}" "${dest}"
+          echo "source=local:${local_file}"
+        else
+          raw_url="https://raw.githubusercontent.com/${CONFIG_REPO}/${CONFIG_REF}/${CONFIG_PATH}"
+          echo "Fetching ${raw_url}"
+
+          curl_args=(-fsSL --retry 3 --retry-delay 2)
+          if [[ -n "${CONFIG_TOKEN}" ]]; then
+            # GitHub raw + private repos: use API contents endpoint instead.
+            api_url="https://api.github.com/repos/${CONFIG_REPO}/contents/${CONFIG_PATH}?ref=${CONFIG_REF}"
+            curl_args+=(-H "Authorization: Bearer ${CONFIG_TOKEN}" -H "Accept: application/vnd.github.raw")
+            if ! curl "${curl_args[@]}" "${api_url}" -o "${dest}"; then
+              echo "::error::Failed to fetch ${CONFIG_PATH} from ${CONFIG_REPO}@${CONFIG_REF} via API"
+              exit 1
+            fi
+          else
+            if ! curl "${curl_args[@]}" "${raw_url}" -o "${dest}"; then
+              echo "::error::Failed to fetch ${raw_url}"
+              exit 1
+            fi
+          fi
+          echo "source=remote:${CONFIG_REPO}@${CONFIG_REF}:${CONFIG_PATH}"
+        fi
+
+        if [[ ! -s "${dest}" ]]; then
+          echo "::error::regions.yaml is empty after fetch"
+          exit 1
+        fi
+
+        echo "path=${dest}" >> "${GITHUB_OUTPUT}"
+
+    - name: Install PyYAML
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install --user -q pyyaml
+
+    - name: Locate parse script
+      id: script
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        # Prefer the script from a full checkout of this repo; otherwise use the
+        # copy bundled next to this composite action.
+        candidates=()
+        if [[ -n "${WORKING_DIRECTORY}" ]]; then
+          candidates+=("${WORKING_DIRECTORY%/}/scripts/parse_regions.py")
+        fi
+        candidates+=(
+          "${ACTION_PATH}/parse_regions.py"
+          "${GITHUB_ACTION_PATH:-}/parse_regions.py"
+        )
+
+        script=""
+        for candidate in "${candidates[@]}"; do
+          if [[ -n "${candidate}" && -f "${candidate}" ]]; then
+            script="${candidate}"
+            break
+          fi
+        done
+
+        if [[ -z "${script}" ]]; then
+          echo "::error::parse_regions.py not found (expected under scripts/ or the action directory)"
+          exit 1
+        fi
+
+        echo "path=${script}" >> "${GITHUB_OUTPUT}"
+
+    - name: Parse and validate regions
+      id: parse
+      shell: bash
+      env:
+        REGION_FILE: ${{ steps.fetch.outputs.path }}
+        PARSE_SCRIPT: ${{ steps.script.outputs.path }}
+        REQUESTED_REGION: ${{ inputs.region }}
+      run: |
+        set -euo pipefail
+
+        args=(--file "${REGION_FILE}" --github-output "${GITHUB_OUTPUT}" --print)
+        if [[ -n "${REQUESTED_REGION}" ]]; then
+          args+=(--region "${REQUESTED_REGION}")
+        fi
+
+        python3 "${PARSE_SCRIPT}" "${args[@]}"
